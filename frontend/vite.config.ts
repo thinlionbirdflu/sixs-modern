@@ -6,6 +6,7 @@ export default defineConfig(({ mode }) => {
     plugins: [react()],
     server: {
       port: 5173,
+      strictPort: true,
       proxy: { '/api': {
         target: env.API_URL || 'http://127.0.0.1:3001',
         ...(env.API_TOKEN ? { headers: { Authorization: 'Bearer ' + env.API_TOKEN } } : {})
