@@ -22,7 +22,22 @@ MikroORM documentation: https://mikro-orm.io/docs/usage-with-js
 
 ## Run locally (PowerShell)
 
-Run these commands from the project root:
+With Node.js 24+ installed and Docker Desktop running, launch everything from the project root:
+
+```powershell
+.\Start-Testing.ps1
+```
+
+If PowerShell blocks scripts, allow this launch only:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Start-Testing.ps1
+```
+
+The launcher creates missing .env files, installs dependencies, starts PostgreSQL, applies migrations, opens backend/frontend terminals, and opens the browser after both apps are ready. Existing .env files are preserved. Use `-RunChecks` to run tests and the frontend build before launching, `-SkipInstall` to reuse installed dependencies, or `-NoBrowser` to skip opening the browser. If you configured a backend API_TOKEN, set the same token in frontend/.env.
+Stop the apps with Ctrl+C in their terminals, and stop PostgreSQL with `docker compose stop`.
+
+For manual startup, run these commands from the project root:
 
 ```powershell
 Copy-Item .env.example .env
