@@ -1,14 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
-import { PGlite } from '@electric-sql/pglite';
+import { createTestOrm } from './helpers.js';
+
 import { createApp } from '../src/app.js';
 
 test('PostgreSQL schema and HTTP workflows preserve relationships, reports and concurrency', { timeout: 60000 }, async () => {
-  const db = new PGlite();
-  const sql = await readFile(new URL('../../database/001_initial.sql', import.meta.url), 'utf8');
-  await db.exec(sql);
-  const server = createApp(db).listen(0, '127.0.0.1');
+  const orm = await createTestOrm();
+  const server = createApp(orm).listen(0, '127.0.0.1');
   await new Promise(resolve => server.once('listening', resolve));
   const base = 'http://127.0.0.1:' + server.address().port + '/api/';
   async function request(path, method = 'GET', body) {
@@ -21,6 +19,7 @@ test('PostgreSQL schema and HTTP workflows preserve relationships, reports and c
       street:'123 Example Street', city:'Example', state:'IL', zip_code:'60601', phone_number:'555-0100'
     });
     assert.equal(customer.status, 201);
+    assert.equal(customer.body.data.date_of_birth, '1950-02-01');
     const customerId = customer.body.data.id;
     const company = await request('companies', 'POST', { name:'Test Carrier' });
     const type = await request('policy-types', 'POST', { name:'Supplement' });
@@ -36,6 +35,9 @@ test('PostgreSQL schema and HTTP workflows preserve relationships, reports and c
     const policy = await request('policies','POST',policyInput);
     assert.equal(policy.status,201);
     assert.equal(policy.body.data.premium,'123.45');
+    assert.equal(policy.body.data.customer_id, customerId);
+    assert.equal(policy.body.data.date_written, '2026-01-15');
+    assert.equal(policy.body.data.commission_percentage, '10.0000');
     assert.equal((await request('policies','POST',policyInput)).status,409);
     assert.equal((await request('policies','POST',{...policyInput,policy_number:'BAD',customer_id:9999})).status,409);
     const report = await request('reports/sales?year=2026&employee_id='+employee.body.data.id);
@@ -43,6 +45,21 @@ test('PostgreSQL schema and HTTP workflows preserve relationships, reports and c
     assert.equal(report.body.data[0].policy_count,1);
     assert.equal(report.body.data[0].total_premium,'123.45');
     assert.equal(report.body.data[0].month,'2026-01');
+    assert.equal(report.body.data[0].employee_id, employee.body.data.id);
+    assert.equal(report.body.data[0].employee, 'Test Agent');
+    assert.equal(report.body.data[0].policy_type_id, type.body.data.id);
+    assert.equal(report.body.data[0].policy_type, 'Supplement');
+    const second = await request('policies', 'POST', { ...policyInput, policy_number: 'TEST-002', premium: '0.10' });
+    const previous = await request('policies', 'POST', { ...policyInput, policy_number: 'TEST-003', date_written: '2025-12-31' });
+    assert.equal(second.status, 201);
+    assert.equal(previous.status, 201);
+    const totals = await request('reports/sales?year=2026');
+    assert.equal(totals.body.data.length, 1);
+    assert.equal(totals.body.data[0].policy_count, 2);
+    assert.equal(totals.body.data[0].total_premium, '123.55');
+    assert.deepEqual((await request('reports/sales?year=2026&employee_id=9999')).body.data, []);
+    await request('policies/' + second.body.data.id, 'DELETE', { version: 1 });
+    await request('policies/' + previous.body.data.id, 'DELETE', { version: 1 });
     const updated = await request('companies/'+company.body.data.id,'PATCH',{name:'Revised Carrier',version:1});
     assert.equal(updated.status,200);
     assert.equal(updated.body.data.version,2);
@@ -62,6 +79,6 @@ test('PostgreSQL schema and HTTP workflows preserve relationships, reports and c
   } finally {
     server.closeAllConnections();
     await new Promise(resolve=>server.close(resolve));
-    await db.close();
+    await orm.close();
   }
 });
