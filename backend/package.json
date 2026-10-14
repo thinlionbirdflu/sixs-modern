@@ -9,11 +9,14 @@
     "db:migrate": "node --env-file=.env scripts/migrate.js"
   },
   "dependencies": {
+    "@mikro-orm/core": "7.2.5",
+    "@mikro-orm/migrations": "7.2.5",
+    "@mikro-orm/postgresql": "7.2.5",
     "express": "^5.1.0",
-    "pg": "^8.16.0",
     "zod": "^4.0.0"
   },
   "devDependencies": {
-    "@electric-sql/pglite": "^0.5.10"
+    "@electric-sql/pglite": "^0.5.10",
+    "@mikro-orm/pglite": "7.2.5"
   }
 }

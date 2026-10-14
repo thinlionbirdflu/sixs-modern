@@ -17,7 +17,7 @@ Decisions requiring business confirmation:
 - IDs are generated integers; legacy IDs need a mapping if data is later imported.
 - Policy numbers are unique per carrier, not globally.
 - Renewal's units are unclear in the old model: stored as a nonnegative decimal, without assuming dollars or percent.
-- Commission and initial percentages use 0–100 units.
+- Commission and initial percentages use 0â€“100 units.
 - Premium is a decimal amount; currency and billing conversion are not inferred.
 - Status and billing period are free text until approved vocabularies exist.
 - Date written and effective date have no ordering constraint; backdated policies may be legitimate.
@@ -28,7 +28,7 @@ Decisions requiring business confirmation:
 - Sales reports count all policies by date written, including policies later canceled; this follows the visible legacy reporting logic.
 - Employee username attribution is editable legacy metadata, not authenticated identity.
 - Money and decimal API fields are strings to avoid floating-point rounding.
-- Row versions provide optimistic concurrency; timestamps and version increments are maintained by application SQL, without triggers or procedures.
+- Row versions provide optimistic concurrency; timestamps and version increments are maintained through MikroORM, without triggers or procedures.
 - Tables initially share one database for referential integrity. They are modular service candidates, not independently deployed services yet.
 
 No stored procedures, functions, triggers or password tables are created.

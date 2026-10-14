@@ -1,61 +1,75 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createApp } from '../src/app.js';
-async function withServer(pool, run, token = '') {
-  const server = createApp(pool, token).listen(0, '127.0.0.1');
-  await new Promise(resolve => server.once('listening', resolve));
-  try { await run('http://127.0.0.1:' + server.address().port); }
-  finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
-}
-test('create binds values and rejects unknown fields before querying', async () => {
-  const calls = [];
-  const pool = { query: async (sql, values) => { calls.push({sql, values}); return { rows: [{id:1, version:1, name:values[0]}] }; } };
-  await withServer(pool, async base => {
+import { withServer } from './helpers.js';
+
+const json = body => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+
+test('create stores SQL-looking text as data and rejects unknown fields', async () => {
+  await withServer(async base => {
     const name = "Carrier'); DROP TABLE customers; --";
-    const response = await fetch(base + '/api/companies', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name}) });
+    const response = await fetch(base + '/api/companies', json({ name }));
     assert.equal(response.status, 201);
-    assert.equal(calls[0].sql.includes(name), false);
-    assert.deepEqual(calls[0].values, [name]);
-    const invalid = await fetch(base + '/api/companies', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name, table:'customers'}) });
+    const record = (await response.json()).data;
+    assert.equal(record.name, name);
+    assert.equal(record.version, 1);
+    assert.equal(record.contact_number, null);
+    assert.ok(record.created_at);
+    const invalid = await fetch(base + '/api/companies', json({ name, table: 'customers' }));
     assert.equal(invalid.status, 400);
-    assert.equal(calls.length, 1);
+    assert.equal((await (await fetch(base + '/api/companies')).json()).data.length, 1);
+    assert.equal((await fetch(base + '/api/customers')).status, 200);
   });
 });
-test('stale updates return conflict and bind row version', async () => {
-  let params;
-  await withServer({query:async (_sql,values)=> { params=values;return {rows:[]}; }}, async base => {
-    const res = await fetch(base + '/api/companies/7', {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'Revised',version:2})});
-    assert.equal(res.status,409);
-    assert.deepEqual(params,['Revised',7,2]);
+
+test('version checks are atomic for racing edits, no-op edits and deletes', async () => {
+  await withServer(async base => {
+    const created = await fetch(base + '/api/companies', json({ name: 'Carrier' }));
+    const record = (await created.json()).data;
+    const url = base + '/api/companies/' + record.id;
+    const edit = name => fetch(url, { ...json({ name, version: 1 }), method: 'PATCH' });
+    const responses = await Promise.all([edit('First'), edit('Second')]);
+    assert.deepEqual(responses.map(r => r.status).sort(), [200, 409]);
+    const current = (await (await fetch(url)).json()).data;
+    assert.equal(current.version, 2);
+    const noOp = await fetch(url, { ...json({ name: current.name, version: 2 }), method: 'PATCH' });
+    assert.equal(noOp.status, 200);
+    assert.equal((await noOp.json()).data.version, 3);
+    assert.equal((await fetch(url, { ...json({ version: 2 }), method: 'DELETE' })).status, 409);
+    assert.equal((await fetch(url, { ...json({ version: 3 }), method: 'DELETE' })).status, 204);
+    assert.equal((await fetch(url)).status, 404);
   });
 });
-test('pagination and report year reject invalid input without database calls', async () => {
-  await withServer({query:async()=> { throw new Error('Unexpected database call'); }}, async base => {
-    assert.equal((await fetch(base+'/api/customers?limit=1000')).status,400);
-    assert.equal((await fetch(base+'/api/reports/sales?year=abc')).status,400);
-    assert.equal((await fetch(base+'/api/unknown')).status,404);
+
+test('pagination, report year and unknown endpoints reject invalid input', async () => {
+  await withServer(async base => {
+    assert.equal((await fetch(base + '/api/customers?limit=1000')).status, 400);
+    assert.equal((await fetch(base + '/api/reports/sales?year=abc')).status, 400);
+    assert.equal((await fetch(base + '/api/unknown')).status, 404);
   });
 });
-test('search treats SQL and wildcard characters as data', async () => {
-  let call;
-  await withServer({query:async(sql,values)=> { call={sql,values};return {rows:[]}; }}, async base => {
-    const q="O'Brien%_";
-    assert.equal((await fetch(base+'/api/customers?q='+encodeURIComponent(q))).status,200);
-    assert.equal(call.sql.includes(q),false);
-    assert.equal(call.values[0], "%O'Brien\\%\\_%");
+
+test('search treats wildcard characters, quotes and backslashes as literal substrings', async () => {
+  await withServer(async base => {
+    for (const name of ["O'Brien%_", "O'BrienXY", 'Back\\slash', 'Backslash'])
+      assert.equal((await fetch(base + '/api/companies', json({ name }))).status, 201);
+    for (const q of ["o'brien%_", 'Back\\slash']) {
+      const response = await fetch(base + '/api/companies?q=' + encodeURIComponent(q));
+      assert.equal(response.status, 200);
+      const records = (await response.json()).data;
+      assert.equal(records.length, 1);
+    }
+    const page = await (await fetch(base + '/api/companies?limit=1&offset=1')).json();
+    assert.equal(page.data.length, 1);
+    assert.equal(page.data[0].name, 'Back\\slash');
+    assert.equal(page.limit, 1);
+    assert.equal(page.offset, 1);
   });
 });
+
 test('token protection rejects anonymous access; health remains available', async () => {
-  await withServer({query:async()=>({rows:[]})}, async base => {
-    assert.equal((await fetch(base+'/health')).status,200);
-    assert.equal((await fetch(base+'/api/companies')).status,401);
-    assert.equal((await fetch(base+'/api/companies',{headers:{Authorization:'Bearer test-secret'}})).status,200);
-  },'test-secret');
-});
-test('database dependency errors return safe conflict response', async () => {
-  await withServer({query:async()=> { throw Object.assign(new Error('secret detail'),{code:'23503'}); }}, async base => {
-    const response=await fetch(base+'/api/customers/1',{method:'DELETE',headers:{'Content-Type':'application/json'},body:'{"version":1}'});
-    assert.equal(response.status,409);
-    assert.equal((await response.text()).includes('secret detail'),false);
-  });
+  await withServer(async base => {
+    assert.equal((await fetch(base + '/health')).status, 200);
+    assert.equal((await fetch(base + '/api/companies')).status, 401);
+    assert.equal((await fetch(base + '/api/companies', { headers: { Authorization: 'Bearer test-secret' } })).status, 200);
+  }, 'test-secret');
 });

@@ -1,14 +1,14 @@
 # SIXS Modern
 
 Node.js backend, React + TypeScript frontend, and an inferred PostgreSQL database.
-No .NET runtime, SQL Server, stored procedures, ORM, or hidden session-based business state.
+Database access uses MikroORM with PostgreSQL. No .NET runtime, SQL Server, stored procedures, or hidden session-based business state.
 
 ## What is implemented
 
 - JSON CRUD APIs for customers, policies, companies, policy types, employees, alternate contacts and Medicare.
 - Frontend list/search, add/edit/delete forms, foreign-key selectors, pagination and sales reports.
-- Server-side allowlisted validation, parameterized SQL, decimal strings and optimistic concurrency.
-- PostgreSQL schema migration with a migration ledger and concurrency lock.
+- Server-side allowlisted validation, MikroORM entities and query builders, decimal strings and optimistic concurrency.
+- Transactional MikroORM migrations with a migration ledger and PostgreSQL advisory lock.
 - Local-only defaults; no real data, credentials or seed records copied from the old project.
 
 This is a working development starter, not a complete production or distributed deployment.
@@ -18,7 +18,7 @@ Business modules currently use one backend and database. Review database/ASSUMPT
 
 Node.js 24 LTS with npm, plus Docker Compose or an existing PostgreSQL server.
 Runtime guidance: https://nodejs.org/en/about/previous-releases
-Parameterized query documentation: https://node-postgres.com/features/queries
+MikroORM documentation: https://mikro-orm.io/docs/usage-with-js
 
 ## Run locally (PowerShell)
 
@@ -50,7 +50,7 @@ The SQL script can alternatively be applied once with:
 ```powershell
 psql "postgresql://sixs:local-development-only@localhost:5432/sixs" -v ON_ERROR_STOP=1 -f database/001_initial.sql
 ```
-Choose either this direct setup or the migration runner on a fresh database; do not run both against the same initialized schema.
+Use the migration runner for new databases. Databases initialized by the original runner are automatically adopted from their schema_migrations ledger, preserving existing records. A database initialized directly with psql has no ledger; it must be explicitly baselined before using the runner.
 
 ## API
 
@@ -85,4 +85,14 @@ Separate deployment requires replacing cross-domain foreign keys with API checks
 
 npm test checks input contracts and HTTP CRUD/error/concurrency behavior, plus schema and relational workflows using embedded PostgreSQL (PGlite).
 npm run build type-checks and bundles the frontend.
-A standalone PostgreSQL instance is still required to verify deployment, the pg driver connection, and the migration runner against your environment.
+A standalone PostgreSQL instance is still required to verify deployment, the PostgreSQL driver connection and migration locking against your environment.
+
+## Database access
+
+Entity mappings live in backend/src/entities.js and ORM configuration in backend/src/orm.js.
+Each API request gets an isolated EntityManager through MikroORM RequestContext.
+CRUD uses entity persistence and ORM queries. PATCH uses a conditional QueryBuilder update so row versions are checked and advanced atomically, even for unchanged values; DELETE also matches the expected version.
+Sales aggregation stays in PostgreSQL through MikroORM QueryBuilder. Its SQL expression fragments handle month formatting, full names, counts and exact decimal sums; request values use ORM query conditions.
+The immutable database/001_initial.sql schema is applied by backend/migrations/Migration001Initial.js through MikroORM Migrator, retaining the original constraints and indexes.
+Migration ledger bootstrap, application migrations and legacy adoption are serialized under the advisory lock.
+Add subsequent Migration classes to ormOptions.migrations.migrationsList. Do not use automatic schema updates on an existing database.
